@@ -3,70 +3,122 @@ const router = express.Router();
 const Appointment = require("../models/Appointment");
 const sendSMS = require("../utils/sms");
 const auth = require("../middleware/auth");
+const { getTodayKey } = require("../utils/time");
 
-// GET all appointments
+function emitQueueUpdated(req) {
+  req.app.get("io").emit("queueUpdated");
+}
+
 router.get("/appointments", auth, async (req, res) => {
-  const appointments = await Appointment.find().sort({ appointmentTime: 1 });
+  const todayOnly = req.query.scope !== "all";
+  const status = String(req.query.status || "").trim();
+  const prefix = String(req.query.prefix || "").trim().toUpperCase();
+
+  const filters = {};
+
+  if (todayOnly) {
+    filters.dateKey = getTodayKey();
+  }
+
+  if (status) {
+    filters.status = status;
+  }
+
+  if (prefix) {
+    filters.prefix = prefix;
+  }
+
+  const appointments = await Appointment.find(filters).sort({
+    appointmentTime: 1,
+    tokenNumber: 1,
+  });
+
   res.json(appointments);
 });
 
-// SERVE
-router.put("/appointments/:id/serve", async (req, res) => {
-  await Appointment.findByIdAndUpdate(req.params.id, { status: "served" });
-   const io = req.app.get("io");
-  io.emit("queueUpdated");
-  res.json({ message: "Customer served" });
+router.get("/today-stats", auth, async (req, res) => {
+  const todayKey = getTodayKey();
+
+  const [customersToday, waiting, notified, serving, served] = await Promise.all([
+    Appointment.countDocuments({ dateKey: todayKey }),
+    Appointment.countDocuments({ dateKey: todayKey, status: "waiting" }),
+    Appointment.countDocuments({ dateKey: todayKey, status: "notified" }),
+    Appointment.countDocuments({ dateKey: todayKey, status: "serving" }),
+    Appointment.countDocuments({ dateKey: todayKey, status: "served" }),
+  ]);
+
+  res.json({ customersToday, waiting, notified, serving, served });
 });
 
-// NOTIFY
-router.post("/appointments/:id/notify", async (req, res) => {
-  const appt = await Appointment.findById(req.params.id);
-  if (!appt) return res.status(404).json({ message: "Appointment not found" });
-
-  await sendSMS(
-    appt.contactValue,
-    `Please arrive now. Your token ${appt.tokenNumber} is ready.`
+router.put("/appointments/:id/call", auth, async (req, res) => {
+  const appointment = await Appointment.findByIdAndUpdate(
+    req.params.id,
+    {
+      status: "serving",
+      notificationSent: true,
+    },
+    { new: true }
   );
 
-  appt.notificationSent = true;
-  await appt.save();
+  if (!appointment) {
+    return res.status(404).json({ message: "Appointment not found" });
+  }
 
-    const io = req.app.get("io");
-  io.emit("queueUpdated");
-
-  res.json({ message: "Notification sent" });
+  emitQueueUpdated(req);
+  res.json({ message: `${appointment.tokenLabel} is now being served`, appointment });
 });
 
-// ⭐ DELETE (ADD HERE ONLY)
-router.delete("/appointments/:id", async (req, res) => {
+router.put("/appointments/:id/serve", auth, async (req, res) => {
+  const appointment = await Appointment.findByIdAndUpdate(
+    req.params.id,
+    {
+      status: "served",
+      notificationSent: true,
+    },
+    { new: true }
+  );
+
+  if (!appointment) {
+    return res.status(404).json({ message: "Appointment not found" });
+  }
+
+  emitQueueUpdated(req);
+  res.json({ message: "Customer served", appointment });
+});
+
+router.post("/appointments/:id/notify", auth, async (req, res) => {
+  const appointment = await Appointment.findById(req.params.id);
+
+  if (!appointment) {
+    return res.status(404).json({ message: "Appointment not found" });
+  }
+
+  await sendSMS(
+    appointment.contactValue,
+    `Please arrive now. Your token ${appointment.tokenLabel} for ${appointment.serviceName} is ready.`
+  );
+
+  appointment.notificationSent = true;
+  appointment.status = "notified";
+  await appointment.save();
+
+  emitQueueUpdated(req);
+  res.json({ message: "Notification sent", appointment });
+});
+
+router.delete("/appointments/:id", auth, async (req, res) => {
   try {
     const deleted = await Appointment.findByIdAndDelete(req.params.id);
 
     if (!deleted) {
       return res.status(404).json({ message: "Token not found" });
     }
-      
-    const io = req.app.get("io");
-    io.emit("queueUpdated");
-    res.json({ message: "Token deleted successfully" });
+
+    emitQueueUpdated(req);
+    res.json({ message: "Token cancelled successfully" });
   } catch (err) {
     res.status(500).json({ error: err.message || "Delete failed" });
   }
-});
-
-
-router.get("/today-stats", auth, async (req, res) => {
-  const start = new Date();
-  start.setHours(0,0,0,0);
-
-  const end = new Date();
-  end.setHours(23,59,59,999);
-
-  const count = await Appointment.countDocuments({
-    createdAt: { $gte: start, $lte: end }
-  });
-
-  res.json({ customersToday: count });
 });
 
 module.exports = router;

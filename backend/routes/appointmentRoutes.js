@@ -1,321 +1,142 @@
 const express = require("express");
 const router = express.Router();
 const Appointment = require("../models/Appointment");
-const sendSMS = require("../utils/sms");
 const Settings = require("../models/Settings");
-const { getTodayKey, getCurrentTime } = require("../utils/time");
-
 const CounterToken = require("../models/CounterToken");
+const { getTodayKey, getCurrentTime } = require("../utils/time");
+const { buildDefaultSettings } = require("../utils/defaultSettings");
 
-// router.post("/", async (req, res) => {
-//   try {
-//     //const { name, contactType, contactValue } = req.body;
-//     // we upgrade to atuo prefix generate Upgrade To Dynamic Prefix
-//     const { name, contactType, contactValue, prefix } = req.body;
+function buildTimeForToday(timeValue) {
+  const [hours, minutes] = String(timeValue || "00:00")
+    .split(":")
+    .map(Number);
 
-//     // ---------------- PHONE VALIDATION ----------------
-//     if (contactType === "phone") {
-//       if (!/^[6-9]\d{9}$/.test(contactValue)) {
-//         return res.status(400).json({
-//           message: "Enter valid 10 digit mobile number"
-//         });
-//       }
-//     }
+  const date = new Date();
+  date.setHours(hours || 0, minutes || 0, 0, 0);
+  return date;
+}
 
-//     const settings = await Settings.findOne();
-//     if (!settings) return res.status(500).json({ message: "Shop settings missing" });
+async function getSettings() {
+  let settings = await Settings.findOne();
 
-//     // ---------------- SHOP CLOSED CHECK ----------------
-//     const nowTime = getCurrentTime();
+  if (!settings) {
+    settings = await Settings.create(buildDefaultSettings());
+  }
 
-//     if (nowTime < settings.openTime || nowTime > settings.closeTime) {
-//       return res.status(403).json({
-//         message: `Shop closed (Open ${settings.openTime} - ${settings.closeTime})`
-//       });
-//     }
+  return settings;
+}
 
-//     // ---------------- CORRECT DATE KEY (IST) ----------------
-//     const todayKey = getTodayKey();
-
-//     // ---------------- FIND LAST TOKEN ----------------
-
-//     // const lastAppointment = await Appointment.findOne({ dateKey: todayKey })
-//     //   .sort({ tokenNumber: -1 });
-
-//     // let tokenNumber = lastAppointment ? lastAppointment.tokenNumber + 1 : 1;
-
-//     // const tokenPrefix = settings.tokenPrefix || "A";
-//     // const tokenLabel = `${tokenPrefix}-${tokenNumber}`;
-
-//     // gone upgrade from scheduling queue to live quiue like walk-in system 
-//    // ---------------- FIND LAST TOKEN (PREFIX AWARE) ----------------
-//    // this fir sinlge counter logic means only for 1 counter
-// // const tokenPrefix = settings.tokenPrefix || "A";
-
-// // const lastAppointment = await Appointment.findOne({
-// //   dateKey: todayKey,
-// //   tokenLabel: { $regex: `^${tokenPrefix}-` }
-// // }).sort({ tokenNumber: -1 });
-
-// // // Generate token number safely
-// // let tokenNumber = lastAppointment ? lastAppointment.tokenNumber + 1 : 1;
-
-// // const tokenLabel = `${tokenPrefix}-${tokenNumber}`;
-
-// // now we upgrade to saas means we can add multiple counter token A, B, C..
-// //const tokenPrefix = settings.tokenPrefix || "A"; // conver to dymanic prefix
-
-
-// // const lastAppointment = await Appointment.findOne({
-// //   dateKey: todayKey,
-// //   prefix: tokenPrefix
-// // }).sort({ tokenNumber: -1 });
-
-// // let tokenNumber = lastAppointment ? lastAppointment.tokenNumber + 1 : 1;
-
-// // const tokenLabel = `${tokenPrefix}-${tokenNumber}`;
-
-// // now we upgrade one more level
-
-// const tokenPrefix = prefix?.trim() || "A"; // dynamic
-
-// const counter = await CounterToken.findOneAndUpdate(
-//   { dateKey: todayKey, prefix: tokenPrefix },
-//   { $inc: { seq: 1 } },
-//   { new: true, upsert: true }
-// );
-
-// const tokenNumber = counter.seq;
-// const tokenLabel = `${tokenPrefix}-${tokenNumber}`;
-
-// const lastAppointment = await Appointment.findOne({
-//   dateKey: todayKey,
-//   prefix: tokenPrefix
-// }).sort({ tokenNumber: -1 });
-//     // ---------------- TIME SLOT CALCULATION ----------------
-//     let appointmentTime;
-// const slot = settings.slotDuration || 10;
-
-// const now = new Date();
-
-// if (!lastAppointment) {
-//   // First booking today → start from NOW
-//   appointmentTime = new Date(now);
-// } else {
-//   // Add slot duration to last token time
-//   appointmentTime = new Date(
-//     lastAppointment.appointmentTime.getTime() + slot * 60000
-//   );
-// }
-
-// // Check generated slot does not exceed closing time
-// const [ch, cm] = settings.closeTime.split(":").map(Number);
-// const closingDateTime = new Date(
-//   now.getFullYear(),
-//   now.getMonth(),
-//   now.getDate(),
-//   ch,
-//   cm
-// );
-
-// const [oh, om] = settings.openTime.split(":").map(Number);
-
-// const openingDateTime = new Date(
-//   now.getFullYear(),
-//   now.getMonth(),
-//   now.getDate(),
-//   oh,
-//   om,
-//   0
-// );
-
-// if (appointmentTime < openingDateTime) {
-//   appointmentTime = openingDateTime;
-// }
-
-// if (appointmentTime > closingDateTime) {
-//   return res.status(403).json({
-//     message: "No more slots available today"
-//   });
-// }
-
-//     // ---------------- SAVE ----------------
-//     // await Appointment.create({
-//     //   name,
-//     //   contactType,
-//     //   contactValue,
-//     //   tokenNumber,
-//     //   tokenLabel,
-//     //   appointmentTime,
-//     //   dateKey: todayKey,
-//     //   status: "waiting"
-//     // });
-
-//   await Appointment.create({
-//   name,
-//   contactType,
-//   contactValue,
-//   prefix: tokenPrefix,  // ⭐ IMPORTANT // this convert sinle to mul counter token like SaaS
-//   tokenNumber,
-//   tokenLabel,
-//   appointmentTime,
-//   dateKey: todayKey,
-//   status: "waiting"
-// });
-
-//     req.app.get("io").emit("queueUpdated");
-
-//     res.status(201).json({
-//       tokenNumber,
-//       tokenLabel,
-//       appointmentTime,
-//       message: "Token booked successfully"
-//     });
-
-//   } catch (err) {
-//     if (err.code === 11000)
-//       return res.status(409).json({ message: "Token collision — retry" });
-
-//     res.status(500).json({ error: err.message });
-//   }
-// });
-
-// new clean route with prevent duplicate and do no generate same no token again at same time or day
 router.post("/", async (req, res) => {
   try {
-    const { name, contactType, contactValue, prefix } = req.body;
+    const rawName = String(req.body.name || "").trim();
+    const contactType = String(req.body.contactType || "phone").trim();
+    const contactValue = String(req.body.contactValue || "").trim();
+    const prefix = String(req.body.prefix || "A").trim().toUpperCase();
 
-    // ---------------- PHONE VALIDATION ----------------
-    if (contactType === "phone") {
+    if (rawName.length < 2) {
+      return res.status(400).json({ message: "Please enter a valid customer name" });
+    }
+
+    if (contactType === "phone" || contactType === "whatsapp") {
       if (!/^[6-9]\d{9}$/.test(contactValue)) {
         return res.status(400).json({
-          message: "Enter valid 10 digit mobile number"
+          message: "Enter a valid 10 digit mobile number",
         });
       }
     }
 
-    const settings = await Settings.findOne();
-    if (!settings) {
-      return res.status(500).json({ message: "Shop settings missing" });
+    const settings = await getSettings();
+    const services = Array.isArray(settings.services) && settings.services.length
+      ? settings.services
+      : buildDefaultSettings().services;
+
+    const service = services.find((item) => item.prefix === prefix);
+
+    if (!service) {
+      return res.status(400).json({ message: "Selected service is not available" });
+    }
+
+    const nowTime = getCurrentTime();
+    if (nowTime < settings.openTime || nowTime > settings.closeTime) {
+      return res.status(403).json({
+        message: `Shop closed (Open ${settings.openTime} - ${settings.closeTime})`,
+      });
     }
 
     const todayKey = getTodayKey();
-
-    // ---------------- BLOCK DUPLICATE PHONE BOOKINGS ----------------
     const existing = await Appointment.findOne({
       dateKey: todayKey,
       contactValue,
-      status: { $ne: "served" }
+      prefix,
+      status: { $in: ["waiting", "notified", "serving"] },
     });
 
     if (existing) {
       return res.status(400).json({
-        message: `You already have token ${existing.tokenLabel}`
+        message: `You already have token ${existing.tokenLabel} for ${existing.serviceName}`,
       });
     }
 
-    // ---------------- SHOP CLOSED CHECK ----------------
-    const nowTime = getCurrentTime();
-
-    if (nowTime < settings.openTime || nowTime > settings.closeTime) {
-      return res.status(403).json({
-        message: `Shop closed (Open ${settings.openTime} - ${settings.closeTime})`
-      });
-    }
-
-    // ---------------- TOKEN PREFIX ----------------
-    const tokenPrefix = prefix?.trim() || "A";
-
-    // ---------------- ATOMIC TOKEN GENERATION ----------------
     const counter = await CounterToken.findOneAndUpdate(
-      { dateKey: todayKey, prefix: tokenPrefix },
+      { dateKey: todayKey, prefix },
       { $inc: { seq: 1 } },
       { new: true, upsert: true }
     );
 
     const tokenNumber = counter.seq;
-    const tokenLabel = `${tokenPrefix}-${tokenNumber}`;
+    const tokenLabel = `${prefix}-${tokenNumber}`;
 
-    // ---------------- LAST APPOINTMENT ----------------
     const lastAppointment = await Appointment.findOne({
       dateKey: todayKey,
-      prefix: tokenPrefix
+      prefix,
     }).sort({ tokenNumber: -1 });
 
-    // ---------------- TIME SLOT CALCULATION ----------------
-    let appointmentTime;
-    const slot = settings.slotDuration || 10;
-    const now = new Date();
+    const slotDuration = service.slotDuration || settings.slotDuration || 10;
+    let appointmentTime = lastAppointment
+      ? new Date(lastAppointment.appointmentTime.getTime() + slotDuration * 60000)
+      : new Date();
 
-    if (!lastAppointment) {
-      appointmentTime = new Date(now);
-    } else {
-      appointmentTime = new Date(
-        lastAppointment.appointmentTime.getTime() + slot * 60000
-      );
-    }
-
-    // ---------------- OPENING TIME ----------------
-    const [oh, om] = settings.openTime.split(":").map(Number);
-
-    const openingDateTime = new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      now.getDate(),
-      oh,
-      om,
-      0
-    );
+    const openingDateTime = buildTimeForToday(settings.openTime);
+    const closingDateTime = buildTimeForToday(settings.closeTime);
 
     if (appointmentTime < openingDateTime) {
       appointmentTime = openingDateTime;
     }
 
-    // ---------------- CLOSING TIME ----------------
-    const [ch, cm] = settings.closeTime.split(":").map(Number);
-
-    const closingDateTime = new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      now.getDate(),
-      ch,
-      cm,
-      0
-    );
-
     if (appointmentTime > closingDateTime) {
       return res.status(403).json({
-        message: "No more slots available today"
+        message: "No more slots available today",
       });
     }
 
-    // ---------------- SAVE APPOINTMENT ----------------
-    await Appointment.create({
-      name,
+    const appointment = await Appointment.create({
+      name: rawName,
       contactType,
       contactValue,
-      prefix: tokenPrefix,
+      prefix,
+      serviceName: service.name,
       tokenNumber,
       tokenLabel,
       appointmentTime,
       dateKey: todayKey,
-      status: "waiting"
+      status: "waiting",
     });
 
     req.app.get("io").emit("queueUpdated");
 
     res.status(201).json({
+      id: appointment._id,
+      serviceName: appointment.serviceName,
       tokenNumber,
       tokenLabel,
       appointmentTime,
-      message: "Token booked successfully"
+      status: appointment.status,
+      message: "Token booked successfully",
     });
-
   } catch (err) {
-
     if (err.code === 11000) {
       return res.status(409).json({
-        message: "Token already exists, please retry"
+        message: "A token already exists for this service. Please retry.",
       });
     }
 
@@ -323,19 +144,15 @@ router.post("/", async (req, res) => {
   }
 });
 
-
-
-//new route
 router.get("/:prefix/:tokenNumber", async (req, res) => {
-
-  const { prefix, tokenNumber } = req.params;
-
+  const prefix = String(req.params.prefix || "").trim().toUpperCase();
+  const tokenNumber = Number(req.params.tokenNumber);
   const todayKey = getTodayKey();
 
   const appointment = await Appointment.findOne({
     prefix,
     tokenNumber,
-    dateKey: todayKey
+    dateKey: todayKey,
   });
 
   if (!appointment) {
@@ -345,13 +162,10 @@ router.get("/:prefix/:tokenNumber", async (req, res) => {
   res.json({
     tokenNumber: appointment.tokenNumber,
     tokenLabel: appointment.tokenLabel,
+    serviceName: appointment.serviceName,
     appointmentTime: appointment.appointmentTime,
-    status: appointment.status
+    status: appointment.status,
   });
 });
-
-
-// DELETE APPOINTMENT (CANCEL TOKEN)
-
 
 module.exports = router;
